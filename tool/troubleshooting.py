@@ -4,6 +4,8 @@ import re
 import shutil
 import subprocess
 
+from i18n import t
+
 
 UI_RECOVERY = (
     "读屏连接失败时，请检查 GKD、自动记账、Appium 等是否正在自动操作手机。"
@@ -42,7 +44,7 @@ def accessibility_summary(serial, adb=None):
             candidate = os.path.expanduser("~/Library/Android/sdk/platform-tools/adb")
             adb = candidate if os.path.isfile(candidate) else None
         if not adb:
-            return "未找到可用于只读检查的 adb；仍可按下方步骤排查。"
+            return t("cli.troubleshooting.acc_no_adb", default="未找到可用于只读检查的 adb；仍可按下方步骤排查。")
         result = subprocess.run(
             [adb, "-s", serial, "shell",
              "settings get secure accessibility_enabled; settings get secure enabled_accessibility_services"],
@@ -51,15 +53,15 @@ def accessibility_summary(serial, adb=None):
         )
         lines = result.stdout.strip().splitlines()
         if result.returncode or len(lines) != 2 or lines[0].strip() not in {"0", "1"}:
-            return "未能读取无障碍服务状态；仍可按下方步骤排查。"
+            return t("cli.troubleshooting.acc_unreadable", default="未能读取无障碍服务状态；仍可按下方步骤排查。")
         configured = lines[1].strip()
         services = set() if configured in {"", "null"} else set(configured.split(":"))
         if any(not re.fullmatch(r"[\w.]+/[\w.$]+", value) for value in services):
-            return "未能识别无障碍服务状态；仍可按下方步骤排查。"
+            return t("cli.troubleshooting.acc_unrecognized", default="未能识别无障碍服务状态；仍可按下方步骤排查。")
         if lines[0].strip() == "0":
-            status = "无障碍总开关为关闭"
+            status = t("cli.troubleshooting.acc_off", default="无障碍总开关为关闭")
         else:
-            status = f"无障碍总开关已开启，配置了 {len(services)} 项服务"
-        return f"只读检查：{status}。此信息不能证明谁占用读屏，也不能排除独立的自动化 / Shizuku 会话。"
+            status = t("cli.troubleshooting.acc_on", count=len(services), default="无障碍总开关已开启，配置了 {count} 项服务")
+        return t("cli.troubleshooting.acc_summary", status=status, default="只读检查：{status}。此信息不能证明谁占用读屏，也不能排除独立的自动化 / Shizuku 会话。")
     except (OSError, subprocess.TimeoutExpired):
-        return "无障碍状态读取超时或失败；仍可按下方步骤排查。"
+        return t("cli.troubleshooting.acc_timeout", default="无障碍状态读取超时或失败；仍可按下方步骤排查。")

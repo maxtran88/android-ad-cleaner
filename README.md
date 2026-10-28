@@ -1,3 +1,5 @@
+> English | Tiếng Việt | 中文（本页）：[English](README.en.md) · [Tiếng Việt](README.vi.md) · 中文（本页）
+
 # 手机去广告
 
 关掉国产安卓手机系统里的广告、热搜、资讯推荐和营销推送。

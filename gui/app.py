@@ -34,6 +34,44 @@ DATA = data_dir()
 BACKUPS = os.path.join(DATA, "backups")
 
 
+# ---------- GUI 语言：locales/*.json，中文为默认与回退 ----------
+# JS 界面用同一批文件；Python 这里只翻译 GUI 自己产生的文案（窗口标题、
+# 对话框、下载进度、诊断信息、上报错误），不碰 adb、子进程命令与 tool/ 输出。
+GUI_LANGS = ("zh", "en", "vi")
+GUI_LANG_FILE = os.path.join(DATA, "gui-lang.json")
+
+
+def _saved_lang():
+    try:
+        lang = json.load(open(GUI_LANG_FILE, encoding="utf-8")).get("lang")
+    except (OSError, ValueError, AttributeError):
+        return "zh"
+    return lang if lang in GUI_LANGS else "zh"
+
+
+def _load_gui_locale(lang):
+    try:
+        with open(os.path.join(BASE, "locales", lang + ".json"), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _fmt_gui(text, params):
+    for k, v in (params or {}).items():
+        text = text.replace("{" + k + "}", str(v))
+    return text
+
+
+def _placeholders(lang):
+    """脱敏占位符随语言换；缺文件时回退中文，与旧文案一致。"""
+    loc = _load_gui_locale(lang)
+    return {"email": loc.get("gui.app.ph_email", "<邮箱>"), "phone": loc.get("gui.app.ph_phone", "<手机号>"),
+            "ip": loc.get("gui.app.ph_ip", "<IP>"), "userdir": loc.get("gui.app.ph_userdir", "<用户目录>"),
+            "serial": loc.get("gui.app.ph_serial", "<序列号>")}
+
+
 # ---------- 命令行模式：打包后子进程走这里 ----------
 def _fix_stdio():
     """Windows 窗口程序没有控制台：父进程用管道接输出时，把 1/2 号句柄包成 sys.stdout/stderr。"""
@@ -98,10 +136,11 @@ def find_adb():
     return None
 
 
-def child_env(adb):
+def child_env(adb, lang="zh"):
     e = dict(os.environ)
     e.update({"ADB": adb or "", "ADBUTILS_ADB_PATH": adb or "", "AAC_BACKUPS": BACKUPS,
-              "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "AAC_GUI": "1"})
+              "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1", "AAC_GUI": "1",
+              "AAC_LANG": lang})     # 只透传语言选择；tool/ 是否读取由 CLI 侧决定
     if adb:
         e["PATH"] = os.path.dirname(adb) + os.pathsep + e.get("PATH", "")
     return e
@@ -130,7 +169,8 @@ NOWIN = 0x08000000 if IS_WIN else 0     # Windows：子进程不弹黑色控制�
 USB_VENDORS = {"04E8": "三星", "12D1": "华为", "339B": "荣耀", "2717": "小米", "22D9": "OPPO / 一加 / realme",
                "2A70": "一加", "2D95": "vivo / iQOO", "18D1": "Google", "2A45": "魅族", "19D2": "中兴 / 努比亚",
                "22B8": "摩托罗拉", "0B05": "华硕", "17EF": "联想", "05C6": "高通方案"}
-DRIVER_HINT = {
+_DRIVER_KEY = {"三星": "gui.app.driver_samsung", "华为": "gui.app.driver_huawei", "荣耀": "gui.app.driver_honor"}
+_DRIVER_ZH = {
     "三星": "Windows 要先装三星官方的 Samsung Android USB Driver，装好后重新插线。",
     "华为": "开发者选项里同时打开「仅充电模式下允许 ADB 调试」。驱动可装华为手机助手获取，装好后退出手机助手再用本工具。"
             "已升级 HarmonyOS NEXT（5.0 及以上，原生鸿蒙）的机型不支持 adb。",
@@ -159,19 +199,21 @@ def usb_phones():
     return found
 
 
-def usb_hint(found):
+def usb_hint(found, lang="zh"):
     """把设备管理器的结果说成一句人话；没有手机设备时返回空。"""
     if not found:
         return ""
     brand = found[0][0]
     adb = [f for f in found if f[3]]
+    loc = _load_gui_locale(lang)
     if adb and any(f[2].upper() != "OK" for f in adb):
-        head = f"电脑识别到{brand}手机的调试接口，但驱动没有装好。"
+        head = _fmt_gui(loc.get("gui.app.usb_driver_bad", "电脑识别到{brand}手机的调试接口，但驱动没有装好。"), {"brand": brand})
     elif adb:
-        head = f"电脑识别到{brand}手机的调试接口，但 adb 没连上：请退出手机助手类软件和模拟器后重新插线。"
+        head = _fmt_gui(loc.get("gui.app.usb_adb_missing", "电脑识别到{brand}手机的调试接口，但 adb 没连上：请退出手机助手类软件和模拟器后重新插线。"), {"brand": brand})
     else:
-        head = f"电脑识别到{brand}手机，但没有调试接口：手机上的「USB 调试」还没打开，或没点「允许 USB 调试」。"
-    return head + DRIVER_HINT.get(brand, "")
+        head = _fmt_gui(loc.get("gui.app.usb_no_debug", "电脑识别到{brand}手机，但没有调试接口：手机上的「USB 调试」还没打开，或没点「允许 USB 调试」。"), {"brand": brand})
+    key = _DRIVER_KEY.get(brand)
+    return head + (loc.get(key, _DRIVER_ZH[brand]) if key else "")
 
 
 def other_adb():
@@ -229,20 +271,21 @@ def win_clipboard(text):
 REPORT_URL = "https://supabase.ahuamiao.com/functions/v1/aac-report"
 REPORT_LIMIT = 3            # 每小时最多上报几次（服务器另有按 IP / 安装编号 / 全站的配额）
 PRIVATE = (
-    (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "<邮箱>"),
-    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "<手机号>"),
-    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"), "<IP>"),
-    (re.compile(r"(?:/Users/|/home/|[A-Za-z]:\\Users\\)[^/\\\s'\"]+"), "<用户目录>"),
+    (re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"), "email"),
+    (re.compile(r"(?<!\d)1[3-9]\d{9}(?!\d)"), "phone"),
+    (re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b"), "ip"),
+    (re.compile(r"(?:/Users/|/home/|[A-Za-z]:\\Users\\)[^/\\\s'\"]+"), "userdir"),
 )
 
 
-def scrub(text, serial=None):
+def scrub(text, serial=None, lang="zh"):
     """序列号、用户目录、邮箱、手机号、IP 换成占位符；服务器收到后再做一遍。"""
-    for private, replacement in ((serial, "<序列号>"), (os.path.expanduser("~"), "<用户目录>")):
+    ph = _placeholders(lang)
+    for private, replacement in ((serial, ph["serial"]), (os.path.expanduser("~"), ph["userdir"])):
         if private:
             text = text.replace(private, replacement).replace(private.replace("\\", "\\\\"), replacement)
-    for pattern, replacement in PRIVATE:
-        text = pattern.sub(replacement, text)
+    for pattern, key in PRIVATE:
+        text = pattern.sub(ph[key], text)
     return text
 
 
@@ -252,6 +295,9 @@ SERVICE = re.compile(r"TETHERING|热点|ENVELOPE|红包|Auto lock|盗窃|hotspot
 
 class Api:
     def __init__(self):
+        self.lang = _saved_lang()
+        self._locale = None
+        self._locale_lang = None
         self.adb = find_adb()
         self.job = None
         self.lock = threading.Lock()
@@ -262,13 +308,39 @@ class Api:
         self.report_times = []
 
     # ----- 基础 -----
+    def _t(self, key, fallback, **params):
+        """GUI 自有文案：缺 key 或缺文件时回退中文原文。"""
+        if self._locale is None or self._locale_lang != self.lang:
+            self._locale = _load_gui_locale(self.lang)
+            self._locale_lang = self.lang
+        return _fmt_gui(self._locale.get(key, fallback), params)
+
+    def get_lang(self):
+        return self.lang
+
+    def set_lang(self, lang):
+        if lang in GUI_LANGS:
+            self.lang = lang
+            try:
+                with open(GUI_LANG_FILE, "w", encoding="utf-8") as f:
+                    json.dump({"lang": lang}, f)
+            except OSError:
+                pass
+        return self.lang
+
+    def locale(self, lang):
+        """JS 界面按语言取整份 locale；非法语言回退中文。"""
+        if lang not in GUI_LANGS:
+            lang = "zh"
+        return _load_gui_locale(lang)
+
     def env(self):
-        return {"adb": self.adb, "data": DATA, "version": VERSION, "os": platform.system(),
+        return {"adb": self.adb, "data": DATA, "version": VERSION, "os": platform.system(), "lang": self.lang,
                 "images": [f for f in sorted(os.listdir(os.path.join(BASE, "images"))) if f.startswith("dev-")]}
 
     def _run(self, script, *args, timeout=180):
         r = subprocess.run(cmd_for(script, *args), capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", env=child_env(self.adb), timeout=timeout, creationflags=NOWIN)
+                           errors="replace", env=child_env(self.adb, self.lang), timeout=timeout, creationflags=NOWIN)
         return r.stdout, r.stderr, r.returncode
 
     def _adb(self, *args, timeout=20):
@@ -283,7 +355,7 @@ class Api:
         threading.Thread(target=self._download, daemon=True).start()
 
     def _download(self):
-        self.dl = {"state": "running", "pct": 0, "msg": "正在从 Google 官网下载 platform-tools……"}
+        self.dl = {"state": "running", "pct": 0, "msg": self._t("gui.app.download_start", "正在从 Google 官网下载 platform-tools……")}
         try:
             url = ADB_URL[platform.system()]
             zp = os.path.join(DATA, "platform-tools.zip")
@@ -303,9 +375,9 @@ class Api:
             if not IS_WIN:
                 os.chmod(adb, 0o755)
             self.adb = adb
-            self.dl = {"state": "done", "pct": 100, "msg": "adb 已就绪"}
+            self.dl = {"state": "done", "pct": 100, "msg": self._t("gui.app.download_done", "adb 已就绪")}
         except Exception as e:
-            self.dl = {"state": "error", "pct": 0, "msg": f"下载失败：{e}"}
+            self.dl = {"state": "error", "pct": 0, "msg": self._t("gui.app.download_failed", "下载失败：{err}", err=e)}
 
     def download_state(self):
         return self.dl
@@ -342,7 +414,7 @@ class Api:
 
     def usb_hint(self):
         """没有手机出现时调用：只读设备管理器，给出驱动 / 开关提示。"""
-        return usb_hint(usb_phones())
+        return usb_hint(usb_phones(), self.lang)
 
     def status(self, serial):
         out, err, rc = self._run("run.py", "-s", serial, "status-json", timeout=90)
@@ -357,9 +429,9 @@ class Api:
         try:
             out, err, rc = self._run("chan_fast.py", "-s", serial, "scan", timeout=120)
         except (subprocess.TimeoutExpired, OSError) as e:
-            return self._remember_error("通知扫描", serial, str(e))
+            return self._remember_error(self._t("gui.app.op_scan", "通知扫描"), serial, str(e))
         if rc:
-            return self._remember_error("通知扫描", serial, err or out or "通知扫描失败，请检查连接与权限")
+            return self._remember_error(self._t("gui.app.op_scan", "通知扫描"), serial, err or out or "通知扫描失败，请检查连接与权限")
         rows = []
         for line in out.splitlines():
             parts = line.split("\t")
@@ -372,7 +444,8 @@ class Api:
 
     def _remember_error(self, operation, serial, detail):
         # 本地保留完整异常，分享前替换序列号和用户目录；不再截掉异常开头。
-        for private, replacement in ((serial, "<序列号>"), (os.path.expanduser("~"), "<用户目录>")):
+        _ph = _placeholders(self.lang)
+        for private, replacement in ((serial, _ph["serial"]), (os.path.expanduser("~"), _ph["userdir"])):
             if private:
                 detail = detail.replace(private, replacement).replace(private.replace("\\", "\\\\"), replacement)
         self.last_error = {"operation": operation, "detail": detail}
@@ -399,14 +472,14 @@ class Api:
     def ui_check(self, serial):
         with self.lock:
             if self.job and self.job["running"]:
-                return {"error": "任务正在执行，请结束后再检查读屏连接"}
+                return {"error": self._t("gui.app.ui_busy_check", "任务正在执行，请结束后再检查读屏连接")}
             try:
                 # 直接启动读屏进程，超时时终止它；不经额外父进程留下仍在连接的子任务。
                 out, err, rc = self._run("fast.py", "-s", serial, "check", timeout=75)
             except (subprocess.TimeoutExpired, OSError) as e:
-                return self._remember_error("读屏检查", serial, str(e))
+                return self._remember_error(self._t("gui.app.op_ui_check", "读屏检查"), serial, str(e))
             if rc:
-                return self._remember_error("读屏检查", serial, err or out)
+                return self._remember_error(self._t("gui.app.op_ui_check", "读屏检查"), serial, err or out)
             return {"ok": True, "message": out.strip()}
 
     # ----- 任务 -----
@@ -414,20 +487,20 @@ class Api:
         """plan: {backup, steps:[段名]|None, channels:[{pkg,id,name}], quickapp:bool, ads:[包名], model}"""
         with self.lock:
             if self.job and self.job["running"]:
-                return {"error": "已有任务在运行"}
+                return {"error": self._t("gui.app.running_task", "已有任务在运行")}
             tasks = []
             if plan.get("backup", True):
-                tasks.append(("存改动前的快照", "run.py", ["-s", serial, "backup"]))
+                tasks.append((self._t("gui.app.task_backup", "存改动前的快照"), "run.py", ["-s", serial, "backup"]))
             if plan.get("steps"):
-                tasks.append(("关闭各 App 里的广告开关", "run.py",
+                tasks.append((self._t("gui.app.task_recipe", "关闭各 App 里的广告开关"), "run.py",
                               ["-s", serial, "recipe", *plan["steps"], *(["--ref"] if plan.get("ref") else [])]))
             if plan.get("channels"):
-                tasks.append(("关闭营销通知", "@channels", plan["channels"]))
+                tasks.append((self._t("gui.app.task_channels", "关闭营销通知"), "@channels", plan["channels"]))
             if plan.get("quickapp"):
-                tasks.append(("关闭快应用", "run.py", ["-s", serial, "quickapp", "off"]))
+                tasks.append((self._t("gui.app.task_quickapp", "关闭快应用"), "run.py", ["-s", serial, "quickapp", "off"]))
             if plan.get("ads"):
-                tasks.append(("挂起广告组件", "run.py", ["-s", serial, "suspend", *plan["ads"]]))
-            tasks.append(("收尾", "run.py", ["-s", serial, "finish"]))
+                tasks.append((self._t("gui.app.task_suspend", "挂起广告组件"), "run.py", ["-s", serial, "suspend", *plan["ads"]]))
+            tasks.append((self._t("gui.app.task_finish", "收尾"), "run.py", ["-s", serial, "finish"]))
             self.job = {"running": True, "lines": [], "idx": 0, "total": len(tasks), "title": "",
                         "results": [], "proc": None, "cancel": False, "t0": time.time(), "serial": serial,
                         "model": plan.get("model", "")}
@@ -454,7 +527,7 @@ class Api:
             self._log(f"\n▶ {title}")
             needs_ui = script == "@channels" or (script == "run.py" and len(args) > 2 and args[2] == "recipe")
             if ui_busy and needs_ui:
-                reason = "读屏服务仍被占用，跳过本步骤；请先解决读屏连接再重试。"
+                reason = self._t("gui.app.ui_busy_skip", "读屏服务仍被占用，跳过本步骤；请先解决读屏连接再重试。")
                 self._log(reason)
                 j["results"].append({"title": title, "rc": 3, "skipped": True, "sec": 0, "tail": [reason]})
                 continue
@@ -471,7 +544,7 @@ class Api:
                 script, args = "chan_fast.py", ["-s", j["serial"], "off", fn]
             try:
                 p = subprocess.Popen(cmd_for(script, *args), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, encoding="utf-8", errors="replace", env=child_env(self.adb),
+                                     text=True, encoding="utf-8", errors="replace", env=child_env(self.adb, self.lang),
                                      creationflags=NOWIN, bufsize=1)
                 j["proc"] = p
                 tail = []
@@ -490,7 +563,8 @@ class Api:
                     j["recovery"] = error["recovery"]
         j["running"] = False
         j["proc"] = None
-        self._log(f"\n执行结束，用时 {round(time.time() - j['t0'])} 秒" if not j["cancel"] else "\n已停止")
+        self._log("\n" + (self._t("gui.app.job_done", "执行结束，用时 {sec} 秒", sec=round(time.time() - j["t0"]))
+                           if not j["cancel"] else self._t("gui.app.job_stopped", "已停止")))
 
     def poll(self, since=0):
         j = self.job
@@ -524,62 +598,70 @@ class Api:
             d = self._latest_backup(st.get("info", {}).get("model", ""))
             fn = d and os.path.join(d, "channels.tsv")
             if not fn or not os.path.exists(fn):
-                return "没有找到上次关掉的营销通知清单"
+                return self._t("gui.app.restore_no_channels", "没有找到上次关掉的营销通知清单")
             out, err, rc = self._run("chan_fast.py", "-s", serial, "on", fn, timeout=600)
         else:
-            return "未知的还原项"
+            return self._t("gui.app.restore_unknown", "未知的还原项")
         return out + err
 
     # ----- 反馈 -----
     def diagnostics(self):
-        """反馈附带的诊断信息。序列号替换成 <序列号>；不含应用列表和通知内容。"""
-        lines = [f"- 客户端：{APP_NAME} {VERSION}（{'打包版' if FROZEN else '源码'}）",
-                 f"- 电脑：{os_name()}（{platform.machine()}）"]
+        """反馈附带的诊断信息。序列号替换成占位符；不含应用列表和通知内容。"""
+        tr = self._t
+        variant = tr("gui.app.diag_variant_frozen", "打包版") if FROZEN else tr("gui.app.diag_variant_source", "源码")
+        lines = [tr("gui.app.diag_client", "客户端：{name} {version}（{variant}）", name=APP_NAME, version=VERSION, variant=variant),
+                 tr("gui.app.diag_computer", "电脑：{os}（{arch}）", os=os_name(), arch=platform.machine())]
         try:
-            v = self._adb("version", timeout=8).splitlines()[0] if self.adb else "没有 adb"
+            v = self._adb("version", timeout=8).splitlines()[0] if self.adb else tr("gui.app.diag_adb_missing", "没有 adb")
         except Exception as e:
-            v = f"adb 出错：{e}"
-        lines.append(f"- adb：{v}")
+            v = tr("gui.app.diag_adb_error", "adb 出错：{err}", err=e)
+        lines.append(tr("gui.app.diag_adb", "adb：{v}", v=v))
         st, serial = self.last_status, (self.job or {}).get("serial")
         rows = [l.split()[1] for l in self.last_devices.splitlines()[1:] if len(l.split()) > 1]
-        lines.append(f"- adb 设备：{len(rows)} 台" + (f"（{'、'.join(rows)}）" if rows else ""))
+        sep = "、" if self.lang == "zh" else ", "
+        lst = ((f"（{sep.join(rows)}）" if self.lang == "zh" else f" ({sep.join(rows)})") if rows else "")
+        lines.append(tr("gui.app.diag_devices", "adb 设备：{n} 台{list}", n=len(rows), list=lst))
         others = [o for o in other_adb() if not self.adb or os.path.normcase(o) != os.path.normcase(self.adb)]
         if others:
-            lines.append(f"- 其他正在运行的 adb：{'；'.join(others)}")
+            lines.append(tr("gui.app.diag_other_adb", "其他正在运行的 adb：{list}", list=("；" if self.lang == "zh" else "; ").join(others)))
         if not rows:
-            hint = usb_hint(usb_phones())
+            hint = usb_hint(usb_phones(), self.lang)
             if hint:
-                lines.append(f"- USB：{hint}")
+                lines.append(tr("gui.app.diag_usb", "USB：{hint}", hint=hint))
         if st and "info" in st:
             i = st["info"]
             nm = i.get("name") or i.get("model")
             if not nm.upper().startswith((i.get("brand") or "").upper()):
                 nm = f"{i.get('brand')} {nm}"
-            lines += [f"- 手机：{nm}（{i.get('model')}）",
-                      f"- 系统：{i.get('os') or i.get('build')}（{i.get('build')}），Android {i.get('android')}",
-                      f"- 机型脚本：{st.get('recipe') or '无'}"
-                      + (f"（录制版本 {st.get('recipe_build')}，{'一致' if st.get('recipe_ok') else '不一致'}）" if st.get('recipe') else ""),
-                      f"- 折叠屏展开：{'是' if st.get('fold_open') else '否'}；锁屏：{'是' if st.get('locked') else '否'}"
-                      + ("；电脑点击被拒（未开 USB 调试安全设置）" if st.get("input_blocked") else "")]
+            lines += [tr("gui.app.diag_phone", "手机：{name}（{model}）", name=nm, model=i.get("model")),
+                      tr("gui.app.diag_system", "系统：{os}（{build}），Android {android}", os=i.get("os") or i.get("build"), build=i.get("build"), android=i.get("android")),
+                      tr("gui.app.diag_recipe", "机型脚本：{recipe}", recipe=st.get("recipe") or tr("gui.app.diag_recipe_none", "无"))
+                      + (tr("gui.app.diag_recipe_build", "（录制版本 {build}，{match}）", build=st.get("recipe_build"), match=tr("gui.app.diag_match", "一致") if st.get("recipe_ok") else tr("gui.app.diag_mismatch", "不一致")) if st.get("recipe") else ""),
+                      tr("gui.app.diag_fold_lock", "折叠屏展开：{fold}；锁屏：{lock}{blocked}",
+                         fold=tr("gui.app.diag_yes", "是") if st.get("fold_open") else tr("gui.app.diag_no", "否"),
+                         lock=tr("gui.app.diag_yes", "是") if st.get("locked") else tr("gui.app.diag_no", "否"),
+                         blocked=tr("gui.app.diag_input_blocked", "；电脑点击被拒（未开 USB 调试安全设置）") if st.get("input_blocked") else "")]
         else:
-            lines.append("- 手机：还没检测")
+            lines.append(tr("gui.app.diag_phone_none", "手机：还没检测"))
         j = self.job
         if j:
-            lines.append("\n**执行结果**\n")
+            lines.append("\n**" + tr("gui.app.diag_results", "执行结果") + "**\n")
             for r in j["results"]:
-                state = "跳过（读屏服务被占用）" if r.get("skipped") else ("成功" if r["rc"] == 0 else "失败（退出码 %s）" % r["rc"])
-                lines.append(f"- {r['title']}：{state}，{r['sec']} 秒")
+                state = tr("gui.app.diag_result_skipped", "跳过（读屏服务被占用）") if r.get("skipped") else (
+                    tr("gui.app.diag_result_ok", "成功") if r["rc"] == 0 else tr("gui.app.diag_result_fail", "失败（退出码 {rc}）", rc=r["rc"]))
+                lines.append(f"- {r['title']}：{state}，{tr('gui.app.diag_sec', '{sec} 秒', sec=r['sec'])}")
             tail = [l for l in j["lines"] if l.strip()][-60:]
             log = "\n".join(tail)
             if serial:
-                log = log.replace(serial, "<序列号>")
-            lines.append("\n<details><summary>最近的日志</summary>\n\n```text\n" + log + "\n```\n</details>")
+                log = log.replace(serial, _placeholders(self.lang)["serial"])
+            lines.append("\n<details><summary>" + tr("gui.app.diag_recent_log", "最近的日志") + "</summary>\n\n```text\n" + log + "\n```\n</details>")
         if self.last_error:
             detail = self.last_error["detail"].replace("```", "~~~")
-            lines.append(f"\n<details><summary>最近失败的完整诊断：{self.last_error['operation']}</summary>\n\n```text\n{detail}\n```\n</details>")
+            lines.append(f"\n<details><summary>{tr('gui.app.diag_recent_fail', '最近失败的完整诊断：{op}', op=self.last_error['operation'])}</summary>\n\n```text\n{detail}\n```\n</details>")
         report = "\n".join(lines)
         home = os.path.expanduser("~")
-        return report.replace(home, "<用户目录>").replace(home.replace("\\", "\\\\"), "<用户目录>")
+        ph_userdir = _placeholders(self.lang)["userdir"]
+        return report.replace(home, ph_userdir).replace(home.replace("\\", "\\\\"), ph_userdir)
 
     # ----- 错误日志上报 -----
     def report_payload(self):
@@ -590,8 +672,9 @@ class Api:
         log = "\n".join(l for l in j.get("lines", []) if l.strip())
         if self.last_error:
             log += f"\n\n[最近失败：{self.last_error['operation']}]\n{self.last_error['detail']}"
-        steps = [{"title": scrub(r["title"])[:40], "sec": int(r.get("sec") or 0),
-                  "result": "跳过" if r.get("skipped") else ("成功" if r["rc"] == 0 else "失败")}
+        steps = [{"title": scrub(r["title"], lang=self.lang)[:40], "sec": int(r.get("sec") or 0),
+                  "result": self._t("gui.app.report_result_skipped", "跳过") if r.get("skipped") else (
+                      self._t("gui.app.report_result_ok", "成功") if r["rc"] == 0 else self._t("gui.app.report_result_fail", "失败"))}
                  for r in j.get("results", [])][:12]
         return {
             "client_version": VERSION,
@@ -601,7 +684,7 @@ class Api:
             "phone_system": scrub(info.get("os") or info.get("build") or "")[:160],
             "android": (info.get("android") or "")[:16],
             "steps": steps,
-            "log": scrub(log, serial)[-20000:],      # 只留末尾；开头是早先成功的步骤
+            "log": scrub(log, serial, self.lang)[-20000:],      # 只留末尾；开头是早先成功的步骤
         }
 
     def _install_id(self):
@@ -621,9 +704,9 @@ class Api:
         now = time.time()
         self.report_times = [t for t in self.report_times if now - t < 3600]
         if len(self.report_times) >= REPORT_LIMIT:
-            return {"error": f"一小时内最多上报 {REPORT_LIMIT} 次，请稍后再试"}
+            return {"error": self._t("gui.app.report_limit", "一小时内最多上报 {n} 次，请稍后再试", n=REPORT_LIMIT)}
         if not isinstance(payload, dict):
-            return {"error": "上报内容格式不对"}
+            return {"error": self._t("gui.app.report_format", "上报内容格式不对")}
         body = dict(payload, install_id=self._install_id())
         request = urllib.request.Request(
             REPORT_URL, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
@@ -634,19 +717,19 @@ class Api:
                 result = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             if e.code == 429:
-                return {"error": "上报太频繁，请一小时后再试"}
+                return {"error": self._t("gui.app.report_frequent", "上报太频繁，请一小时后再试")}
             try:
                 message = json.loads(e.read().decode("utf-8")).get("message") or ""
             except (ValueError, OSError):
                 message = ""
-            return {"error": f"服务器拒绝了这次上报（{e.code}{'：' + message if message else ''}）"}
+            return {"error": self._t("gui.app.report_rejected", "服务器拒绝了这次上报（{code}{msg}）", code=e.code, msg=(("：" if self.lang == "zh" else ": ") + message) if message else "")}
         except (urllib.error.URLError, OSError, ValueError) as e:
-            return {"error": f"连不上上报服务器：{getattr(e, 'reason', e)}"}
+            return {"error": self._t("gui.app.report_connect", "连不上上报服务器：{err}", err=getattr(e, 'reason', e))}
         self.report_times.append(now)
         if result.get("status") == "duplicate":
             return {"ok": True, "duplicate": True}
         if result.get("status") != "ok":
-            return {"error": "服务器没有确认收到"}
+            return {"error": self._t("gui.app.report_no_confirm", "服务器没有确认收到")}
         return {"ok": True, "id": result.get("id", "")}
 
     def copy_text(self, text):
@@ -725,10 +808,11 @@ def main():
     if smoke:
         _fix_stdio()
         api.adb = None                     # 不枚举真机，不自动下载 adb
+        api.lang = "zh"                    # smoke 断言中文界面与中文读屏排查文案
     result = {"ok": False}
     # 明确 file://：裸文件路径会启动 Bottle HTTP 服务，部分 Windows 环境回环连接超时（#18）。
     url = Path(BASE, "gui", "web", "index.html").resolve().as_uri()
-    w = webview.create_window(APP_NAME, url, js_api=api, hidden=smoke,
+    w = webview.create_window(api._t("gui.title", APP_NAME), url, js_api=api, hidden=smoke,
                               width=1080, height=780, min_size=(900, 640))
     options = {"debug": "--debug" in sys.argv, "http_server": False}
     if smoke:
@@ -741,9 +825,7 @@ def main():
                 raise
             import ctypes, webbrowser
             url = "https://developer.microsoft.com/microsoft-edge/webview2/"
-            ctypes.windll.user32.MessageBoxW(0, "这台电脑缺少微软 Edge WebView2 运行时，界面没法显示。\n\n"
-                                                "点「确定」打开微软官网，下载安装「Evergreen Bootstrapper」后重新打开本程序。\n\n"
-                                                f"（{e}）", APP_NAME, 0x40)
+            ctypes.windll.user32.MessageBoxW(0, api._t("gui.app.webview2_msg", "这台电脑缺少微软 Edge WebView2 运行时，界面没法显示。\n\n点「确定」打开微软官网，下载安装「Evergreen Bootstrapper」后重新打开本程序。\n\n（{err}）", err=e), api._t("gui.title", APP_NAME), 0x40)
             webbrowser.open(url)
     else:
         webview.start(**options)

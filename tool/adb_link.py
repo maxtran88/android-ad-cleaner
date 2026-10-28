@@ -7,6 +7,8 @@ import re
 import shutil
 import subprocess
 
+from i18n import t
+
 # adb 客户端自己的错误（远端命令的 stderr 不会带这些前缀）。
 CLIENT_GONE = re.compile(r"(?mi)^(?:adb(?:\.exe)?|error): .*(?:not found|offline|no devices|unauthorized|authorizing"
                          r"|cannot connect|closed|protocol fault|connection reset)")
@@ -58,4 +60,8 @@ class DeviceLost(RuntimeError):
 
 def lost(detail=""):
     detail = (detail or "").strip()
-    return DeviceLost(HINT + (f"\n原始错误：{detail[-200:]}" if detail else ""))
+    msg = t("cli.errors.device_lost_hint", default=HINT)
+    if detail:
+        msg += t("cli.errors.device_lost_detail", detail=detail[-200:],
+                 default="\n原始错误：{detail}")
+    return DeviceLost(msg)

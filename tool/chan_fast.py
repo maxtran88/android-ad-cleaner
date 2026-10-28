@@ -18,6 +18,7 @@ from fast import Phone, bounds
 from channel_policy import protected_channel
 from troubleshooting import XIAOMI_INPUT
 import adb_link
+from i18n import t, extract_lang_args
 
 
 class ShellPhone:
@@ -36,7 +37,7 @@ class ShellPhone:
             if attempt or not adb_link.wait_for(self.serial, ADB):
                 raise adb_link.lost(result.stderr)
         if result.returncode:
-            raise RuntimeError("adb 读取失败：" + (result.stderr or result.stdout).strip())
+            raise RuntimeError(t("cli.chan.errors.adb_read_failed", detail=(result.stderr or result.stdout).strip(), default="adb 读取失败：{detail}"))
         return SimpleNamespace(output=result.stdout)
 
 KW = re.compile(r"营销|活动|推荐|推广|热点|热门|资讯|新闻|福利|优惠|特惠|精选|精彩|运营|促销|红包|直播|种草|内容|头条|猜你|好物|权益|会员|签到|广告|recommend|promo|market|deal|news|topstory|upsell|offer", re.I)
@@ -56,7 +57,7 @@ def parse(p, locked=None):
     locked：传入集合时，收集系统不允许关闭的渠道（系统应用固定通知权限、渠道本身不可屏蔽，#134）。"""
     txt = p.d.shell("dumpsys notification --noredact", timeout=60).output
     if "PackagePreferences:" not in txt:
-        raise RuntimeError("读不到通知渠道状态，停止操作；请检查 USB 调试连接和系统权限")
+        raise RuntimeError(t("cli.chan.errors.no_notification_state", default="读不到通知渠道状态，停止操作；请检查 USB 调试连接和系统权限"))
     txt = txt[txt.find("PackagePreferences:"):]
     cur, fixed, app_off, d = None, False, {}, {}
     for line in txt.splitlines():
@@ -84,7 +85,7 @@ def keep_awake(reader):
     except RuntimeError:
         ok = False
     if not ok:
-        print("  ! 插电常亮没有设上，手机息屏会打断操作；请把自动锁屏时间调长后再跑。" + XIAOMI_INPUT, flush=True)
+        print(t("cli.chan.keep_awake", default="  ! 插电常亮没有设上，手机息屏会打断操作；请把自动锁屏时间调长后再跑。") + t("cli.troubleshooting.xiaomi_input", default=XIAOMI_INPUT), flush=True)
     return old if old.isdigit() else "0"
 
 
@@ -96,7 +97,7 @@ def load(path):
             if line.strip() and not line.lstrip().startswith("#"):
                 pk, cid, label = (line.split("\t") + ["", ""])[:3]
                 if not re.fullmatch(r"[\w.]+", pk) or not cid:
-                    raise ValueError(f"清单第 {lineno} 行缺少有效包名或渠道 ID")
+                    raise ValueError(t("cli.chan.list.invalid", lineno=lineno, default="清单第 {lineno} 行缺少有效包名或渠道 ID"))
                 out.append((pk, cid, label or cid))
     return out
 
@@ -221,7 +222,7 @@ def wait_page(p, name, rounds=12):
     previous, stable = None, 0
     for _ in range(rounds):
         if p.locked():
-            raise RuntimeError("手机锁屏了，请机主解锁后再跑")
+            raise RuntimeError(t("cli.errors.phone_locked", default="手机锁屏了，请机主解锁后再跑"))
         sw = page_switch(p, name)
         stable = stable + 1 if sw and sw == previous else (1 if sw else 0)
         previous = sw
@@ -279,12 +280,12 @@ def side_effects(before, apps_before, after, apps_after, pk, cid, allowed):
     """点击后除目标渠道外还有什么变了：应用总开关，或不在本批清单里的同应用渠道。"""
     out = []
     if apps_after.get(pk, False) != apps_before.get(pk, False):
-        out.append("应用通知总开关")
+        out.append(t("cli.chan.toggle.side_app", default="应用通知总开关"))
     for key, (name, imp, _) in after.items():
         if key[0] != pk or key == (pk, cid) or key not in before:
             continue
         if (before[key][1] == 0) != (imp == 0) and key not in allowed:
-            out.append(f"渠道「{name}」")
+            out.append(t("cli.chan.toggle.side_channel", name=name, default="渠道「{name}」"))
     return out
 
 
@@ -310,13 +311,13 @@ def undo(p, name, xy, want_on):
 def toggle(p, pk, cid, want_on, name="", allowed=()):
     try:
         if p.locked():
-            return "手机锁屏了，请机主解锁后再跑"
+            return t("cli.errors.phone_locked", default="手机锁屏了，请机主解锁后再跑")
         before, apps_before = parse(p)
         actual_name = before.get((pk, cid), ("", 0, False))[0]
         if not want_on and protected_channel(actual_name, cid, name):
-            return "受保护的找机位功能通知，未关闭"
+            return t("cli.chan.toggle.protected", default="受保护的找机位功能通知，未关闭")
         if state(before, apps_before, pk, cid) in ("--", "del", "app"):
-            return "渠道不存在、已删除或应用通知已关闭，未操作"
+            return t("cli.chan.toggle.no_channel", default="渠道不存在、已删除或应用通知已关闭，未操作")
         p.vivo_app = None
         sw = None
         if not truncated(cid):
@@ -329,17 +330,17 @@ def toggle(p, pk, cid, want_on, name="", allowed=()):
             sw = via_app_page(p, pk, name)
         if not sw:
             # 只记包名 / Activity，不记页面内容；适配新系统靠它。
-            return f"未确认「{name}」渠道页及通知开关，跳过（停在 {p.focus() or '未知页面'}）"
+            return t("cli.chan.toggle.unconfirmed", name=name, focus=p.focus() or t("cli.chan.toggle.unknown_page", default="未知页面"), default="未确认「{name}」渠道页及通知开关，跳过（停在 {focus}）")
         if disabled_at(p, sw[2]):
-            return "系统锁定了这个渠道（开关是灰的），不能关闭"
+            return t("cli.chan.toggle.disabled", default="系统锁定了这个渠道（开关是灰的），不能关闭")
         desired = "ON" if want_on else "off"
         for attempt in range(3):
             # 每次重取页面，开关消失时不能复用旧坐标。
             if p.locked():
-                return "手机锁屏了，停止操作"
+                return t("cli.chan.toggle.locked_stop", default="手机锁屏了，停止操作")
             sw = wait_page(p, name, rounds=6)
             if not sw:
-                return "渠道页或开关已变化，停止操作"
+                return t("cli.chan.toggle.page_changed", default="渠道页或开关已变化，停止操作")
             clicked = sw[1] != want_on
             if clicked:
                 p.click(*sw[2]); time.sleep(0.4); p.confirm()
@@ -347,14 +348,15 @@ def toggle(p, pk, cid, want_on, name="", allowed=()):
             extra = side_effects(before, apps_before, current, apps, pk, cid, allowed)
             if extra:
                 restored = clicked and undo(p, name, sw[2], want_on)
-                raise StopBatch(f"点击后{'、'.join(extra)}发生变化，{'已点回原状态' if restored else '没能自动点回'}，"
-                                "停止整批；请在手机上核对该 App 的通知设置")
+                restored_text = t("cli.chan.toggle.restored", default="已点回原状态") if restored else t("cli.chan.toggle.not_restored", default="没能自动点回")
+                raise StopBatch(t("cli.chan.toggle.stop_batch", extra=t("cli.list.sep", default="、").join(extra), restored=restored_text,
+                                  default="点击后{extra}发生变化，{restored}，停止整批；请在手机上核对该 App 的通知设置"))
             if state(current, apps, pk, cid) == desired:
                 return None
             if sw[1] == want_on:
-                return "界面状态与渠道实际状态不一致，未继续点击"
+                return t("cli.chan.toggle.state_mismatch", default="界面状态与渠道实际状态不一致，未继续点击")
             time.sleep(0.25 + 0.3 * attempt)
-        return "点击后渠道状态未改变"
+        return t("cli.chan.toggle.no_change", default="点击后渠道状态未改变")
     except (StopBatch, adb_link.DeviceLost):
         raise                                    # 点错开关、手机断开：终止整批
     except RuntimeError as e:
@@ -363,14 +365,14 @@ def toggle(p, pk, cid, want_on, name="", allowed=()):
 
 
 def main():
-    a = sys.argv[1:]
+    _, a = extract_lang_args(sys.argv[1:])
     if a in ([], ["--help"], ["-h"]):
-        print(__doc__); return
+        print(t("cli.help.chan", default=__doc__)); return
     if len(a) < 3 or a[0] != "-s" or a[2] not in {"scan", "verify", "off", "on"}:
-        sys.exit("用法：chan_fast.py -s <序列号> scan|verify|off|on [清单.tsv]")
+        sys.exit(t("cli.chan.errors.usage", default="用法：chan_fast.py -s <序列号> scan|verify|off|on [清单.tsv]"))
     serial, cmd = a[1], a[2]
     if cmd != "scan" and len(a) < 4:
-        sys.exit("请提供通知清单路径")
+        sys.exit(t("cli.chan.errors.list_path", default="请提供通知清单路径"))
     # 先校验文件；错误清单不应启动手机读屏服务。
     items = load(a[3]) if cmd != "scan" else []
     reader = ShellPhone(serial)
@@ -388,9 +390,9 @@ def main():
                 else:
                     print(f"{pk}\t{cid}\t{name}")
         if short:
-            print(f"另有 {short} 个渠道的 ID 被系统缩略，无法可靠定位，未列入清单", file=sys.stderr)
+            print(t("cli.chan.scan.truncated", count=short, default="另有 {count} 个渠道的 ID 被系统缩略，无法可靠定位，未列入清单"), file=sys.stderr)
         if fixed:
-            print(f"另有 {fixed} 个渠道属于系统锁定、不允许关闭的系统应用，未列入清单", file=sys.stderr)
+            print(t("cli.chan.scan.fixed", count=fixed, default="另有 {count} 个渠道属于系统锁定、不允许关闭的系统应用，未列入清单"), file=sys.stderr)
         return
     if cmd in ("off", "on"):
         want = cmd == "on"
@@ -403,10 +405,10 @@ def main():
             for pk, cid, label in items:
                 st = state(d, app_off, pk, cid)
                 if not want and protected_channel(d.get((pk, cid), ("", 0, False))[0], cid, label):
-                    print(f"  · 受保护，未改动 {label}（找机位功能通知，当前状态 {st}）")
+                    print(t("cli.chan.main.protected_skip", label=label, st=st, default="  · 受保护，未改动 {label}（找机位功能通知，当前状态 {st}）"))
                     continue
                 if st in ("--", "del", "app"):
-                    print(f"  · 未操作 {label}（渠道不存在、已删除或应用通知已关闭）")
+                    print(t("cli.chan.main.unoperated", label=label, default="  · 未操作 {label}（渠道不存在、已删除或应用通知已关闭）"))
                     if want or st == "--":
                         failures += 1
                     continue
@@ -415,17 +417,18 @@ def main():
                 if not awake:
                     stay_on, awake = keep_awake(reader), True
                 if p is None:
-                    print("正在连接手机读屏服务……", flush=True)
+                    print(t("cli.fast.connecting", default="正在连接手机读屏服务……"), flush=True)
                     p = Phone(serial, log=False)
                 try:
                     err = toggle(p, pk, cid, want, d[(pk, cid)][0], allowed)
                 except (StopBatch, adb_link.DeviceLost) as e:
                     n += 1; failures += 1
-                    print(f"  ✗ {e}  {label}")
+                    print(t("cli.chan.main.error_line", err=e, label=label, default="  ✗ {err}  {label}"))
                     break
                 n += 1
                 failures += bool(err)
-                print(f"  {'✗ '+err if err else ('开' if want else '关')}  {label}")
+                result = t("cli.chan.main.error_prefix", err=err, default="✗ {err}") if err else (t("cli.chan.main.turned_on", default="开") if want else t("cli.chan.main.turned_off", default="关"))
+                print(t("cli.chan.main.result_line", result=result, label=label, default="  {result}  {label}"))
             if p is not None:
                 p.d.shell("input keyevent HOME")   # 只读 / 无需改动时不操作手机页面
         finally:
@@ -436,7 +439,7 @@ def main():
                     reader.shell(f"settings put global stay_on_while_plugged_in {stay_on}")
                 except RuntimeError:
                     pass                        # 手机已断开：收尾一步会再改回
-        print(f"拨了 {n} 个，{time.time()-t0:.0f} 秒")
+        print(t("cli.chan.main.toggled", n=n, secs=f"{time.time()-t0:.0f}", default="拨了 {n} 个，{secs} 秒"))
     d, app_off = parse(reader)
     bad = 0
     for pk, cid, label in items:
@@ -445,13 +448,14 @@ def main():
         if st == "ON" and not protected:
             bad += 1
             if cmd == "off":
-                print(f"  仍开着：{label}")       # 以前只给数量，看不出是哪一个（#115）
+                print(t("cli.chan.main.still_open", label=label, default="  仍开着：{label}"))       # 以前只给数量，看不出是哪一个（#115）
         if cmd == "verify":
-            print(f"{st:4} {label}" + ("（受保护，不参与营销关闭）" if protected else ""))
-    print(f"营销渠道仍开着: {bad} 个")
+            suffix = t("cli.chan.main.verify_protected", default="（受保护，不参与营销关闭）") if protected else ""
+            print(t("cli.chan.main.verify_line", st=st, label=label, suffix=suffix, default="{st:4} {label}{suffix}"))
+    print(t("cli.chan.main.still_open_total", bad=bad, default="营销渠道仍开着: {bad} 个"))
     if cmd == "on":
         pending = sum(state(d, app_off, pk, cid) != "ON" for pk, cid, _ in items)
-        print(f"未恢复的渠道: {pending} 个")
+        print(t("cli.chan.main.pending", pending=pending, default="未恢复的渠道: {pending} 个"))
         if pending or failures:
             sys.exit(1)
     if cmd == "off" and (bad or failures):

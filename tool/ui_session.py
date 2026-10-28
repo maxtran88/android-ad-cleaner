@@ -10,6 +10,7 @@ import tempfile
 import time
 
 import uiautomator2 as u2
+from i18n import t
 from uiautomator2.core import _http_request
 from uiautomator2.exceptions import AccessibilityServiceAlreadyRegisteredError, HTTPError
 
@@ -38,7 +39,7 @@ class DeviceLock:
                 fcntl.flock(self.file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as e:
             self.file.close()
-            raise DeviceBusyError("本电脑另一个去广告任务正在使用这台手机的读屏服务，请结束该任务后重试。") from e
+            raise DeviceBusyError(t("cli.ui_session.device_busy", default="本电脑另一个去广告任务正在使用这台手机的读屏服务，请结束该任务后重试。")) from e
 
     def close(self):
         if not self.file.closed:
@@ -74,12 +75,12 @@ class ManagedDevice(u2.Device):
                 return  # 复用的服务没有属于我们的句柄，不能停止它
             process.kill()  # 仅关闭本次 launch 返回的 adb 流，最多等待 3 秒
             if process.pool() is None:
-                raise RuntimeError("本次读屏进程未退出，停止重连；请退出客户端并重启手机后重试。")
+                raise RuntimeError(t("cli.ui_session.process_not_exited", default="本次读屏进程未退出，停止重连；请退出客户端并重启手机后重试。"))
             self._process = None
         deadline = time.monotonic() + 5
         while self._check_alive():
             if time.monotonic() >= deadline:
-                raise RuntimeError("本次读屏服务未释放，停止重连；请退出客户端并重启手机后重试。")
+                raise RuntimeError(t("cli.ui_session.service_not_released", default="本次读屏服务未释放，停止重连；请退出客户端并重启手机后重试。"))
             time.sleep(.2)
 
     def start_uiautomator(self):

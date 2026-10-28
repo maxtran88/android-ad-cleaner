@@ -21,6 +21,7 @@ import uiautomator2 as u2
 from ui_session import connect
 from troubleshooting import UI_RECOVERY, XIAOMI_INPUT, accessibility_summary, input_blocked
 import adb_link
+from i18n import t, extract_lang_args
 
 BOUNDS = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 DISMISS = ("以后再说", "暂不更新", "暂不", "取消", "我知道了", "跳过", "禁止", "不再提示", "不同意")
@@ -51,19 +52,23 @@ def want_state(title):
 class Phone:
     def __init__(self, serial, log=True):
         if log:
-            print("正在连接手机读屏服务……", flush=True)
+            print(t("cli.fast.connecting", default="正在连接手机读屏服务……"), flush=True)
         try:
             self.d = connect(serial)
         except u2.exceptions.AccessibilityServiceAlreadyRegisteredError as e:
-            raise RuntimeError("UIAUTOMATION_BUSY：手机读屏服务已被占用，本次未点击开关。"
+            raise RuntimeError(t("cli.fast.errors.busy", summary=accessibility_summary(serial),
+                               recovery=t("cli.troubleshooting.ui_recovery", default=UI_RECOVERY),
+                               exc_type=type(e).__name__, exc=e,
+                               default="UIAUTOMATION_BUSY：手机读屏服务已被占用，本次未点击开关。"
                                "已清理本次失败的启动并重试一次，仍无法连接。"
-                               "请退出旧版客户端，只保留一个客户端。\n"
-                               f"{accessibility_summary(serial)}\n{UI_RECOVERY}\n"
-                               f"原始异常：{type(e).__name__}: {e}") from e
+                               "请退出旧版客户端，只保留一个客户端。\n{summary}\n{recovery}\n"
+                               "原始异常：{exc_type}: {exc}")) from e
         except u2.exceptions.UiAutomationError as e:
-            raise RuntimeError("手机读屏服务（UiAutomation）启动失败，本次未点击开关。"
-                               f"\n{accessibility_summary(serial)}\n{UI_RECOVERY}\n"
-                               f"原始异常：{type(e).__name__}: {e}") from e
+            raise RuntimeError(t("cli.fast.errors.ui_failed", summary=accessibility_summary(serial),
+                               recovery=t("cli.troubleshooting.ui_recovery", default=UI_RECOVERY),
+                               exc_type=type(e).__name__, exc=e,
+                               default="手机读屏服务（UiAutomation）启动失败，本次未点击开关。"
+                               "\n{summary}\n{recovery}\n原始异常：{exc_type}: {exc}")) from e
         self.serial, self.lost = serial, False
         self._shell, self.d.shell = self.d.shell, self._resilient_shell
         try:
@@ -71,7 +76,8 @@ class Phone:
             self.W, self.H = self.d.window_size()
             # 小米没开「USB 调试（安全设置）」时能读不能点：先探一下，别跑几分钟全是「没找到」。
             if input_blocked(self.d.shell("input keyevent 0").output):
-                raise RuntimeError("INPUT_BLOCKED：系统拒绝了电脑发出的点击，本次未点击开关。\n" + XIAOMI_INPUT)
+                raise RuntimeError(t("cli.fast.errors.input_blocked", xiaomi=t("cli.troubleshooting.xiaomi_input", default=XIAOMI_INPUT),
+                                     default="INPUT_BLOCKED：系统拒绝了电脑发出的点击，本次未点击开关。\n{xiaomi}"))
         except BaseException:
             self.d.close()
             raise
@@ -240,7 +246,7 @@ class Phone:
         before = {t for t, _, _ in self.texts()}
         self.scroll()
         if self.focus() != focus:
-            raise RuntimeError("翻页离开了当前设置页，停止本段以免操作其他 App")
+            raise RuntimeError(t("cli.fast.errors.page_left", default="翻页离开了当前设置页，停止本段以免操作其他 App"))
         after = {t for t, _, _ in self.texts()}
         return not after <= before
 
@@ -259,22 +265,24 @@ class Phone:
 
     def ls(self):
         root = self.tree()
-        print("·", self.focus())
+        print(t("cli.fast.ls_focus", focus=self.focus(), default="· {focus}"))
         print(" / ".join(t for t, _, _ in self.texts(root)))
         for t, c, xy in self.switches(root):
-            print(f"  [{'开' if c else '关'}] {t}  @{xy}")
+            state = t("cli.fast.switch_on", default="开") if c else t("cli.fast.switch_off", default="关")
+            print(t("cli.fast.ls_switch", state=state, title=t, xy=xy, default="  [{state}] {title}  @{xy}"))
 
     # ---------- 动作 ----------
     def click(self, x, y):
         size = self.d.window_size()
         if tuple(size) != (self.W, self.H):
             self.W, self.H = size
-            raise RuntimeError("屏幕方向或尺寸已变化，停止使用旧坐标；请重新读取页面")
+            raise RuntimeError(t("cli.fast.errors.orientation", default="屏幕方向或尺寸已变化，停止使用旧坐标；请重新读取页面"))
         if not (0 <= x < self.W and 0 <= y < self.H):
-            raise RuntimeError("点击坐标在屏幕外，未操作")
+            raise RuntimeError(t("cli.fast.errors.outside", default="点击坐标在屏幕外，未操作"))
         out = self.d.shell(f"input swipe {x} {y} {x} {y} 80").output   # 有的 App 吞 input tap
         if input_blocked(out):
-            raise RuntimeError("系统拒绝了电脑发出的点击。" + XIAOMI_INPUT)
+            raise RuntimeError(t("cli.fast.errors.click_blocked", xiaomi=t("cli.troubleshooting.xiaomi_input", default=XIAOMI_INPUT),
+                                 default="系统拒绝了电脑发出的点击。{xiaomi}"))
 
     def scroll(self, frac=0.45, up=False):
         """按下-移动-停 0.12 秒-松开：没有惯性，翻多少是多少，约 0.45 秒。"""
@@ -297,7 +305,7 @@ class Phone:
             before = {t for t, _, _ in self.texts()}
             self.scroll(0.58, up=True)
             if self.focus() != focus:
-                raise RuntimeError("回到页顶时离开了当前设置页，停止本段")
+                raise RuntimeError(t("cli.fast.errors.top_left", default="回到页顶时离开了当前设置页，停止本段"))
             if {t for t, _, _ in self.texts()} <= before:
                 break
 
@@ -329,7 +337,7 @@ class Phone:
                         and n.get("text") in ("拒绝", "不允许", "Deny", "Don't allow") and self.on_screen(n)):
                     l, t, r, b = bounds(n)
                     self.click((l+r)//2, (t+b)//2); time.sleep(.4)
-                    self.say("  · 已拒绝运行时权限申请，未授予权限")
+                    self.say(t("cli.fast.dismiss.permission", default="  · 已拒绝运行时权限申请，未授予权限"))
                     return "拒绝权限"
             return None
         parent = {c: p for p in root.iter() for c in p}
@@ -351,7 +359,7 @@ class Phone:
                 l, t, r, b = bounds(n)
                 if 0 < r - l < self.W * 0.3 and 0 < b - t < self.H * 0.12:   # 小图标，不是整行
                     self.click((l + r) // 2, (t + b) // 2); time.sleep(0.6)
-                    self.say(f"  · 弹窗点了 ✕（{key.strip()[:40]}）")
+                    self.say(t("cli.fast.dismiss.popup_x", key=key.strip()[:40], default="  · 弹窗点了 ✕（{key}）"))
                     return "✕"
         tx = self.texts(root)
         if len(tx) > 16:
@@ -363,7 +371,7 @@ class Phone:
             for t, (l, tp, r, b), _ in tx:
                 if t == w:
                     self.click((l + r) // 2, (tp + b) // 2); time.sleep(0.6)
-                    self.say(f"  · 弹窗点了「{w}」")
+                    self.say(t("cli.fast.dismiss.popup_word", word=w, default="  · 弹窗点了「{word}」"))
                     return w
         return None
 
@@ -378,7 +386,7 @@ class Phone:
                     b = self.sig(); self.click(*xy); self.settle(b, wait + 0.4)
                     return True
                 self.dismiss() or time.sleep(0.2)
-            self.say(f"  ✗ 没找到「{text}」")
+            self.say(t("cli.fast.tap.not_found", text=text, default="  ✗ 没找到「{text}」"))
             return False
         if self.miss:                                   # 本段已经走丢：只看当前这一屏
             xy = self.find(text, exact)
@@ -387,7 +395,7 @@ class Phone:
                 self.miss = 0
                 return True
             self.miss += 1
-            self.say(f"  ✗ 没找到「{text}」（快速放弃）")
+            self.say(t("cli.fast.tap.not_found_quick", text=text, default="  ✗ 没找到「{text}」（快速放弃）"))
             return False
         for rnd in range(2 if scrolls else 1):
             for i in range(scrolls + 1):
@@ -407,7 +415,7 @@ class Phone:
             if rnd == 0 and scrolls:
                 self.top(scrolls + 2)
         self.miss += 1
-        self.say(f"  ✗ 没找到「{text}」")
+        self.say(t("cli.fast.tap.not_found", text=text, default="  ✗ 没找到「{text}」"))
         return False
 
     def go(self, text, expect, tries=3, exact=True):
@@ -418,7 +426,7 @@ class Phone:
                 if self.find(expect) or self.find(expect, edge_ok="tab"):
                     return True
                 self.dismiss() or time.sleep(0.3)
-        self.say(f"  ✗ 点「{text}」后没出现「{expect}」")
+        self.say(t("cli.fast.go.not_found", text=text, expect=expect, default="  ✗ 点「{text}」后没出现「{expect}」"))
         return False
 
     def settle(self, before, maxwait=0.8):
@@ -495,7 +503,7 @@ class Phone:
                     if self.confirm():
                         slow = True                     # 这页会弹确认框，逐个点
                     elif self.focus() != start:
-                        self.say(f"  ! 页面变了（{self.focus()}），停")
+                        self.say(t("cli.fast.off.page_changed", focus=self.focus(), default="  ! 页面变了（{focus}），停"))
                         self.back()
                         return done
                 else:
@@ -524,9 +532,11 @@ class Phone:
                     still = wrong()
                 for t, _, w in targets:
                     if t in still:
-                        self.say(f"  ✗ {'打不开' if w else '关不掉'} {t}")
+                        state = t("cli.fast.off.cannot_open", default="打不开") if w else t("cli.fast.off.cannot_close", default="关不掉")
+                        self.say(t("cli.fast.off.failed", state=state, title=t, default="  ✗ {state} {title}"))
                     else:
-                        self.say(f"  {'开（保护类开关）' if w else '关'} {t}")
+                        state = t("cli.fast.off.opened_protect", default="开（保护类开关）") if w else t("cli.fast.off.closed", default="关")
+                        self.say(t("cli.fast.off.done", state=state, title=t, default="  {state} {title}"))
                         self.changed.append((page, t))
                         done += 1
             if not self.scroll_more():
@@ -534,9 +544,11 @@ class Phone:
         if page:
             if kept and not checked:
                 # 页面找到了，只是安全模式不整页全关；不能写成「未找到」
-                self.say(f"  · {page}：安全模式不做整页全关，本页 {len(kept)} 个开关未改动，需要时请按清单手动关")
+                self.say(t("cli.fast.off.safe_mode_page", page=page, count=len(kept), default="  · {page}：安全模式不做整页全关，本页 {count} 个开关未改动，需要时请按清单手动关"))
             else:
-                self.say(f"  · {page}：核对 {len(checked)} 项，调整 {done} 项" + ("（本页未找到目标开关）" if not checked else ""))
+                suffix = t("cli.fast.off.summary_not_found", default="（本页未找到目标开关）") if not checked else ""
+                self.say(t("cli.fast.off.summary", page=page, checked=len(checked), done=done, suffix=suffix,
+                           default="  · {page}：核对 {checked} 项，调整 {done} 项{suffix}"))
         return done
 
     def focused_text(self):
@@ -622,10 +634,10 @@ class Phone:
             if opened:
                 break
         if not opened:
-            self.say(f"  ✗ 设置搜索框没打开，跳过「{kw}」")
+            self.say(t("cli.fast.setting.search_not_open", kw=kw, default="  ✗ 设置搜索框没打开，跳过「{kw}」"))
             return False
         if not self.type_text(kw):
-            self.say(f"  ✗ 设置搜索框输入「{kw}」失败，跳过")
+            self.say(t("cli.fast.setting.type_failed", kw=kw, default="  ✗ 设置搜索框输入「{kw}」失败，跳过"))
             return False
         # 输入框里也有同一段文字；只认非输入框的结果，不能点回搜索框后假报成功。
         t0, xy = time.time(), None
@@ -638,7 +650,7 @@ class Phone:
                 break
             time.sleep(0.15)
         if not xy:
-            self.say(f"  ✗ 没搜到「{entry or kw}」，跳过")
+            self.say(t("cli.fast.setting.not_found", entry=entry or kw, default="  ✗ 没搜到「{entry}」，跳过"))
             return False
         before = self.focus()
         self.click(*xy)
@@ -648,7 +660,7 @@ class Phone:
                 time.sleep(0.3)
                 return True
             time.sleep(0.15)
-        self.say(f"  ✗ 搜索结果「{entry or kw}」没有打开，跳过")
+        self.say(t("cli.fast.setting.not_opened", entry=entry or kw, default="  ✗ 搜索结果「{entry}」没有打开，跳过"))
         return False
 
     def start(self, pkg, activity=None, settle=1.2, foreground=None):
@@ -662,15 +674,15 @@ class Phone:
         if result.exit_code or re.search(r"Error|Exception|No activities found|monkey aborted", result.output, re.I):
             # 同品牌参考脚本里的 App 本机可能没装或换了包名（#87 #165），说清楚，别报成打开失败。
             if "package:" not in self.d.shell(f"pm path {pkg}").output:
-                raise RuntimeError(f"本机没有安装 {pkg}，跳过本段")
-            raise RuntimeError(f"无法打开 {pkg}：{result.output.strip()[-250:]}")
+                raise RuntimeError(t("cli.fast.errors.not_installed", pkg=pkg, default="本机没有安装 {pkg}，跳过本段"))
+            raise RuntimeError(t("cli.fast.errors.open_failed", pkg=pkg, detail=result.output.strip()[-250:], default="无法打开 {pkg}：{detail}"))
         deadline = time.monotonic() + 5
         expected = foreground or pkg
         while self.focus().split("/", 1)[0] != expected:
             if self.focus().split("/", 1)[0] in PERMISSION_CONTROLLERS:
                 self.dismiss()
             if time.monotonic() >= deadline:
-                raise RuntimeError(f"{pkg} 没有进入前台，跳过本段")
+                raise RuntimeError(t("cli.fast.errors.not_foreground", pkg=pkg, default="{pkg} 没有进入前台，跳过本段"))
             time.sleep(0.2)
         def check_foreground():
             current = self.focus().split("/", 1)[0]
@@ -685,7 +697,7 @@ class Phone:
                     time.sleep(.2)
                     current = self.focus().split("/", 1)[0]
             if current != expected:
-                raise RuntimeError(f"{pkg} 启动后离开前台，停止本段以免操作其他 App")
+                raise RuntimeError(t("cli.fast.errors.left_foreground", pkg=pkg, default="{pkg} 启动后离开前台，停止本段以免操作其他 App"))
 
         # 旧版商店冷启动可能暂时没有可读文字；空白不等于广告，不能盲按返回退出 App。
         t = time.time()
@@ -696,7 +708,7 @@ class Phone:
             self.dismiss()                # 仅尝试可识别的关闭 / 拒绝按钮
             time.sleep(.2)
         else:
-            raise RuntimeError(f"{pkg} 启动后 8 秒仍读不到页面，停止本段；请确认首页已加载后重试")
+            raise RuntimeError(t("cli.fast.errors.blank", pkg=pkg, default="{pkg} 启动后 8 秒仍读不到页面，停止本段；请确认首页已加载后重试"))
 
         t = time.time()                    # 首屏加载较慢时，也要给引导/更新弹窗留下处理时间
         while time.time() - t < settle:
@@ -707,11 +719,11 @@ class Phone:
 
 
 def main():
-    a = sys.argv[1:]
+    _, a = extract_lang_args(sys.argv[1:])
     if a in ([], ["--help"], ["-h"]):
-        print(__doc__); return
+        print(t("cli.help.fast", default=__doc__)); return
     if len(a) < 3 or a[0] != "-s":
-        print(__doc__); sys.exit(1)
+        print(t("cli.help.fast", default=__doc__)); sys.exit(1)
     with Phone(a[1]) as p:
         execute(p, a[2], a[3:])
 
@@ -719,10 +731,10 @@ def main():
 def execute(p, cmd, rest):
     if cmd == "check":
         if p.locked():
-            sys.exit("手机锁屏了，请机主解锁后重试")
+            sys.exit(t("cli.errors.phone_locked_retry", default="手机锁屏了，请机主解锁后重试"))
         if not list(p.tree().iter("node")):
-            sys.exit("读屏服务已连接，但没有读到页面节点，请解锁并停在设置首页后重试")
-        print(f"读屏检查通过：{p.W} × {p.H}；未点击或修改任何开关")
+            sys.exit(t("cli.fast.check.no_nodes", default="读屏服务已连接，但没有读到页面节点，请解锁并停在设置首页后重试"))
+        print(t("cli.fast.check.passed", w=p.W, h=p.H, default="读屏检查通过：{w} × {h}；未点击或修改任何开关"))
     elif cmd == "ls":
         p.ls()
     elif cmd == "tap":
@@ -732,7 +744,7 @@ def execute(p, cmd, rest):
     elif cmd == "off":
         keep = rest[0].split(",") if rest and rest[0] else ()
         t = time.time(); n = p.off(keep=keep)
-        print(f"关了 {n} 个，{time.time()-t:.1f} 秒")
+        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t:.1f}", default="关了 {n} 个，{secs} 秒"))
     elif cmd == "scan":
         t = time.time(); seen = {}
         for _ in range(60):
@@ -741,16 +753,18 @@ def execute(p, cmd, rest):
             if not p.scroll_more():
                 break
         for k, c in seen.items():
-            print(f"  [{'开' if c else '关'}] {k}")
+            state = t("cli.fast.switch_on", default="开") if c else t("cli.fast.switch_off", default="关")
+            print(t("cli.fast.scan.line", state=state, title=k, default="  [{state}] {title}"))
         if not seen:
             p.top(); p.ls()
-        print(f"{len(seen)} 个开关，开着 {sum(seen.values())} 个，{time.time()-t:.1f} 秒")
+        print(t("cli.fast.scan.summary", total=len(seen), on=sum(seen.values()), secs=f"{time.time()-t:.1f}",
+                default="{total} 个开关，开着 {on} 个，{secs} 秒"))
     elif cmd == "only":
         t = time.time(); n = p.off(only=rest[0].split(","))
-        print(f"关了 {n} 个，{time.time()-t:.1f} 秒")
+        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t:.1f}", default="关了 {n} 个，{secs} 秒"))
     elif cmd == "run":
         if p.locked():
-            print("✗ 手机锁屏了，先解锁再跑"); sys.exit(2)
+            print(t("cli.fast.execute.run_locked", default="✗ 手机锁屏了，先解锁再跑")); sys.exit(2)
         g = {"p": p, "__name__": "__recipe__", "ONLY": rest[1:]}
         with open(rest[0], encoding="utf-8") as f:
             src = f.read()
@@ -759,14 +773,17 @@ def execute(p, cmd, rest):
         m = re.search(r'^BUILD\s*=\s*"([^"]+)"', src, re.M)
         if m and not (build.startswith(m.group(1)) or osv.startswith(m.group(1))):
             os.environ["AAC_REF"] = "1"
-            print(f"⚠ 机型脚本是按 {m.group(1)} 录的，这台是 {osv or build}：用安全模式跑（只关点名的开关），没找到的段会快速跳过")
+            print(t("cli.fast.execute.version_warn", build=m.group(1), this=osv or build,
+                    default="⚠ 机型脚本是按 {build} 录的，这台是 {this}：用安全模式跑（只关点名的开关），没找到的段会快速跳过"))
         t = time.time()
         try:
             exec(src, g)
         except adb_link.DeviceLost as e:
-            print(f"\n✗ {e}\n已停止：关了 {len(p.changed)} 个，{time.time()-t:.0f} 秒", flush=True)
+            print(t("cli.fast.execute.device_lost", err=e, n=len(p.changed), secs=f"{time.time()-t:.0f}",
+                    default="\n✗ {err}\n已停止：关了 {n} 个，{secs} 秒"), flush=True)
             sys.exit(1)
-        print(f"\n机型脚本跑完：关了 {len(p.changed)} 个，{time.time()-t:.0f} 秒")
+        print(t("cli.fast.execute.run_done", n=len(p.changed), secs=f"{time.time()-t:.0f}",
+                default="\n机型脚本跑完：关了 {n} 个，{secs} 秒"))
         import json, datetime
         logdir = os.environ.get("AAC_BACKUPS") or os.path.dirname(os.path.abspath(rest[0]))
         try:
@@ -778,10 +795,11 @@ def execute(p, cmd, rest):
         except OSError:
             pass
         if g.get("FAILED_STEPS"):
-            print("未完成步骤：" + "、".join(g["FAILED_STEPS"]), flush=True)
+            print(t("cli.fast.execute.failed_steps", steps=t("cli.list.sep", default="、").join(g["FAILED_STEPS"]),
+                    default="未完成步骤：{steps}"), flush=True)
             sys.exit(1)
     else:
-        print(__doc__)
+        print(t("cli.help.fast", default=__doc__))
 
 
 if __name__ == "__main__":
