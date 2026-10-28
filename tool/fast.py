@@ -267,9 +267,9 @@ class Phone:
         root = self.tree()
         print(t("cli.fast.ls_focus", focus=self.focus(), default="· {focus}"))
         print(" / ".join(t for t, _, _ in self.texts(root)))
-        for t, c, xy in self.switches(root):
+        for title, c, xy in self.switches(root):
             state = t("cli.fast.switch_on", default="开") if c else t("cli.fast.switch_off", default="关")
-            print(t("cli.fast.ls_switch", state=state, title=t, xy=xy, default="  [{state}] {title}  @{xy}"))
+            print(t("cli.fast.ls_switch", state=state, title=title, xy=xy, default="  [{state}] {title}  @{xy}"))
 
     # ---------- 动作 ----------
     def click(self, x, y):
@@ -335,8 +335,8 @@ class Phone:
             for n in root.iter("node"):
                 if (n.get("package") in PERMISSION_CONTROLLERS and "Button" in n.get("class", "")
                         and n.get("text") in ("拒绝", "不允许", "Deny", "Don't allow") and self.on_screen(n)):
-                    l, t, r, b = bounds(n)
-                    self.click((l+r)//2, (t+b)//2); time.sleep(.4)
+                    l, tp, r, b = bounds(n)
+                    self.click((l+r)//2, (tp+b)//2); time.sleep(.4)
                     self.say(t("cli.fast.dismiss.permission", default="  · 已拒绝运行时权限申请，未授予权限"))
                     return "拒绝权限"
             return None
@@ -356,10 +356,10 @@ class Phone:
                 continue
             key = (n.get("content-desc") or "") + " " + (n.get("resource-id") or "")
             if self.CLOSE.search(key) and not (n.get("text") or "").strip() and not in_list(n):
-                l, t, r, b = bounds(n)
-                if 0 < r - l < self.W * 0.3 and 0 < b - t < self.H * 0.12:   # 小图标，不是整行
-                    self.click((l + r) // 2, (t + b) // 2); time.sleep(0.6)
-                    self.say(t("cli.fast.dismiss.popup_x", key=key.strip()[:40], default="  · 弹窗点了 ✕（{key}）"))
+                l, tp, r, b = bounds(n)
+                if 0 < r - l < self.W * 0.3 and 0 < b - tp < self.H * 0.12:   # 小图标，不是整行
+                    self.click((l + r) // 2, (tp + b) // 2); time.sleep(0.6)
+                    self.say(t("cli.fast.dismiss.popup_x", name=key.strip()[:40], default="  · 弹窗点了 ✕（{name}）"))
                     return "✕"
         tx = self.texts(root)
         if len(tx) > 16:
@@ -368,8 +368,8 @@ class Phone:
         if any(n.get("checkable") == "true" or n.get("scrollable") == "true" for n in root.iter("node")):
             return None
         for w in DISMISS:
-            for t, (l, tp, r, b), _ in tx:
-                if t == w:
+            for label, (l, tp, r, b), _ in tx:
+                if label == w:
                     self.click((l + r) // 2, (tp + b) // 2); time.sleep(0.6)
                     self.say(t("cli.fast.dismiss.popup_word", word=w, default="  · 弹窗点了「{word}」"))
                     return w
@@ -460,7 +460,7 @@ class Phone:
             for n in root.iter("node"):
                 if (n.get("text") or "").strip() == c and "Button" in (n.get("class") or ""):
                     l, t, r, b = bounds(n)
-                    if r > l and b > t:
+                    if r > l and b > t and self.on_screen(n):
                         self.click((l + r) // 2, (t + b) // 2)
                         time.sleep(0.3)
                         return c
@@ -478,26 +478,26 @@ class Phone:
         for _ in range(max_screens):
             root = self.tree()
             targets = []
-            for t, c, xy in self.switches(root):
-                if not t:
+            for title, c, xy in self.switches(root):
+                if not title:
                     continue
-                want = want_state(t)
+                want = want_state(title)
                 if want is None:
                     continue
-                if any(k in t for k in keep):
+                if any(k in title for k in keep):
                     continue
-                if only is not None and not any(k in t for k in only) and not (want and TRACK_WORDS.search(t)):
+                if only is not None and not any(k in title for k in only) and not (want and TRACK_WORDS.search(title)):
                     continue                              # 「限制广告跟踪」这类保护开关：不在名单里也要打开
                 if os.environ.get("AAC_REF") and only is None and not want:
-                    kept.add(t)
+                    kept.add(title)
                     continue                              # 参考脚本（同品牌别的机型录的）：不做整页全关
-                checked.add(t)
+                checked.add(title)
                 if c == want:
                     continue
                 if xy[1] < self.H * 0.08 or xy[1] > self.H * 0.985:
                     continue
-                targets.append((t, xy, want))
-            for i, (t, xy, _) in enumerate(targets):
+                targets.append((title, xy, want))
+            for i, (title, xy, _) in enumerate(targets):
                 self.click(*xy)
                 if i == 0 or slow:
                     if self.confirm():
@@ -530,14 +530,14 @@ class Phone:
                     retry(still)
                     time.sleep(0.4)
                     still = wrong()
-                for t, _, w in targets:
-                    if t in still:
+                for title, _, w in targets:
+                    if title in still:
                         state = t("cli.fast.off.cannot_open", default="打不开") if w else t("cli.fast.off.cannot_close", default="关不掉")
-                        self.say(t("cli.fast.off.failed", state=state, title=t, default="  ✗ {state} {title}"))
+                        self.say(t("cli.fast.off.failed", state=state, title=title, default="  ✗ {state} {title}"))
                     else:
                         state = t("cli.fast.off.opened_protect", default="开（保护类开关）") if w else t("cli.fast.off.closed", default="关")
-                        self.say(t("cli.fast.off.done", state=state, title=t, default="  {state} {title}"))
-                        self.changed.append((page, t))
+                        self.say(t("cli.fast.off.done", state=state, title=title, default="  {state} {title}"))
+                        self.changed.append((page, title))
                         done += 1
             if not self.scroll_more():
                 break
@@ -617,8 +617,8 @@ class Phone:
         for _ in range(4):
             xy, t0 = None, time.time()
             while time.time() - t0 < 3 and not xy:
-                for t, (l, tp, r, b), _ in self.texts():
-                    if (box and box in t) or (not box and self.BOX.search(t)):
+                for tx, (l, tp, r, b), _ in self.texts():
+                    if (box and box in tx) or (not box and self.BOX.search(tx)):
                         xy = ((l + r) // 2, (tp + b) // 2); break
                 if not xy:
                     time.sleep(0.15)
@@ -642,8 +642,8 @@ class Phone:
         # 输入框里也有同一段文字；只认非输入框的结果，不能点回搜索框后假报成功。
         t0, xy = time.time(), None
         while time.time() - t0 < 3:
-            for t, (l, tp, r, b), n in self.texts():
-                if t == (entry or kw) and not EDIT.search(n.get("class", "")):
+            for tx, (l, tp, r, b), n in self.texts():
+                if tx == (entry or kw) and not EDIT.search(n.get("class", "")):
                     xy = ((l + r) // 2, (tp + b) // 2)
                     break
             if xy:
@@ -700,8 +700,8 @@ class Phone:
                 raise RuntimeError(t("cli.fast.errors.left_foreground", pkg=pkg, default="{pkg} 启动后离开前台，停止本段以免操作其他 App"))
 
         # 旧版商店冷启动可能暂时没有可读文字；空白不等于广告，不能盲按返回退出 App。
-        t = time.time()
-        while time.time() - t < 8:
+        t0 = time.time()
+        while time.time() - t0 < 8:
             check_foreground()
             if self.texts():               # 一两个标签也可能是正常首页
                 break
@@ -710,8 +710,8 @@ class Phone:
         else:
             raise RuntimeError(t("cli.fast.errors.blank", pkg=pkg, default="{pkg} 启动后 8 秒仍读不到页面，停止本段；请确认首页已加载后重试"))
 
-        t = time.time()                    # 首屏加载较慢时，也要给引导/更新弹窗留下处理时间
-        while time.time() - t < settle:
+        t0 = time.time()                    # 首屏加载较慢时，也要给引导/更新弹窗留下处理时间
+        while time.time() - t0 < settle:
             check_foreground()
             self.dismiss()
             time.sleep(0.4)
@@ -738,15 +738,15 @@ def execute(p, cmd, rest):
     elif cmd == "ls":
         p.ls()
     elif cmd == "tap":
-        for t in rest:
-            p.tap(t)
+        for label in rest:
+            p.tap(label)
         p.ls()
     elif cmd == "off":
         keep = rest[0].split(",") if rest and rest[0] else ()
-        t = time.time(); n = p.off(keep=keep)
-        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t:.1f}", default="关了 {n} 个，{secs} 秒"))
+        t0 = time.time(); n = p.off(keep=keep)
+        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t0:.1f}", default="关了 {n} 个，{secs} 秒"))
     elif cmd == "scan":
-        t = time.time(); seen = {}
+        t0 = time.time(); seen = {}
         for _ in range(60):
             for k, c, _ in p.switches():
                 seen.setdefault(k, c)
@@ -757,11 +757,11 @@ def execute(p, cmd, rest):
             print(t("cli.fast.scan.line", state=state, title=k, default="  [{state}] {title}"))
         if not seen:
             p.top(); p.ls()
-        print(t("cli.fast.scan.summary", total=len(seen), on=sum(seen.values()), secs=f"{time.time()-t:.1f}",
+        print(t("cli.fast.scan.summary", total=len(seen), on=sum(seen.values()), secs=f"{time.time()-t0:.1f}",
                 default="{total} 个开关，开着 {on} 个，{secs} 秒"))
     elif cmd == "only":
-        t = time.time(); n = p.off(only=rest[0].split(","))
-        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t:.1f}", default="关了 {n} 个，{secs} 秒"))
+        t0 = time.time(); n = p.off(only=rest[0].split(","))
+        print(t("cli.fast.execute.off_done", n=n, secs=f"{time.time()-t0:.1f}", default="关了 {n} 个，{secs} 秒"))
     elif cmd == "run":
         if p.locked():
             print(t("cli.fast.execute.run_locked", default="✗ 手机锁屏了，先解锁再跑")); sys.exit(2)
@@ -775,21 +775,21 @@ def execute(p, cmd, rest):
             os.environ["AAC_REF"] = "1"
             print(t("cli.fast.execute.version_warn", build=m.group(1), this=osv or build,
                     default="⚠ 机型脚本是按 {build} 录的，这台是 {this}：用安全模式跑（只关点名的开关），没找到的段会快速跳过"))
-        t = time.time()
+        t0 = time.time()
         try:
             exec(src, g)
         except adb_link.DeviceLost as e:
-            print(t("cli.fast.execute.device_lost", err=e, n=len(p.changed), secs=f"{time.time()-t:.0f}",
+            print(t("cli.fast.execute.device_lost", err=e, n=len(p.changed), secs=f"{time.time()-t0:.0f}",
                     default="\n✗ {err}\n已停止：关了 {n} 个，{secs} 秒"), flush=True)
             sys.exit(1)
-        print(t("cli.fast.execute.run_done", n=len(p.changed), secs=f"{time.time()-t:.0f}",
+        print(t("cli.fast.execute.run_done", n=len(p.changed), secs=f"{time.time()-t0:.0f}",
                 default="\n机型脚本跑完：关了 {n} 个，{secs} 秒"))
         import json, datetime
         logdir = os.environ.get("AAC_BACKUPS") or os.path.dirname(os.path.abspath(rest[0]))
         try:
             os.makedirs(logdir, exist_ok=True)
             with open(os.path.join(logdir, "run-log.txt"), "a", encoding="utf-8") as f:
-                f.write(f"\n# {datetime.datetime.now():%Y-%m-%d %H:%M} {' '.join(rest[1:]) or '全跑'}  {time.time()-t:.0f}s\n")
+                f.write(f"\n# {datetime.datetime.now():%Y-%m-%d %H:%M} {' '.join(rest[1:]) or '全跑'}  {time.time()-t0:.0f}s\n")
                 for pg, tt in p.changed:
                     f.write(f"{pg}\t{tt}\n")
         except OSError:

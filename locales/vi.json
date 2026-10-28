@@ -80,7 +80,7 @@
   "cli.fast.connecting": "Đang kết nối dịch vụ đọc màn hình của điện thoại…",
   "cli.fast.dismiss.permission": "  · Đã từ chối yêu cầu cấp quyền khi chạy; không cấp quyền nào",
   "cli.fast.dismiss.popup_word": "  · Đã tắt cửa sổ bật lên bằng cách bấm \"{word}\"",
-  "cli.fast.dismiss.popup_x": "  · Đã tắt cửa sổ bật lên bằng ✕ ({key})",
+  "cli.fast.dismiss.popup_x": "  · Đã tắt cửa sổ bật lên bằng ✕ ({name})",
   "cli.fast.errors.blank": "{pkg} sau 8 giây vẫn không đọc được trang, dừng đoạn này. Hãy chắc chắn trang chính đã tải xong rồi thử lại",
   "cli.fast.errors.busy": "UIAUTOMATION_BUSY: dịch vụ đọc màn hình của điện thoại đang bị chiếm; chưa bấm công tắc nào. Lần khởi động thất bại này đã được dọn dẹp và thử lại một lần nhưng vẫn không kết nối được. Hãy thoát ứng dụng khách cũ và chỉ giữ một ứng dụng khách.\n{summary}\n{recovery}\nNgoại lệ gốc: {exc_type}: {exc}",
   "cli.fast.errors.click_blocked": "Hệ thống đã từ chối thao tác bấm từ máy tính. {xiaomi}",

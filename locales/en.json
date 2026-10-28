@@ -80,7 +80,7 @@
   "cli.fast.connecting": "Connecting to the phone's screen reader service…",
   "cli.fast.dismiss.permission": "  · Runtime permission request declined; no permission granted",
   "cli.fast.dismiss.popup_word": "  · Popup dismissed by tapping \"{word}\"",
-  "cli.fast.dismiss.popup_x": "  · Popup dismissed with ✕ ({key})",
+  "cli.fast.dismiss.popup_x": "  · Popup dismissed with ✕ ({name})",
   "cli.fast.errors.blank": "{pkg} still shows no readable page after 8 seconds; stopping this section. Confirm the home page has loaded, then retry",
   "cli.fast.errors.busy": "UIAUTOMATION_BUSY: the phone's screen reader service is already in use; no switch was tapped. This failed launch was cleaned up and retried once, but it still cannot connect. Please quit the old client and keep only one client.\n{summary}\n{recovery}\nOriginal exception: {exc_type}: {exc}",
   "cli.fast.errors.click_blocked": "The system rejected the computer's tap. {xiaomi}",

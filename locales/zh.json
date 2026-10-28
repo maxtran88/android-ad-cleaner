@@ -80,7 +80,7 @@
   "cli.fast.connecting": "正在连接手机读屏服务……",
   "cli.fast.dismiss.permission": "  · 已拒绝运行时权限申请，未授予权限",
   "cli.fast.dismiss.popup_word": "  · 弹窗点了「{word}」",
-  "cli.fast.dismiss.popup_x": "  · 弹窗点了 ✕（{key}）",
+  "cli.fast.dismiss.popup_x": "  · 弹窗点了 ✕（{name}）",
   "cli.fast.errors.blank": "{pkg} 启动后 8 秒仍读不到页面，停止本段；请确认首页已加载后重试",
   "cli.fast.errors.busy": "UIAUTOMATION_BUSY：手机读屏服务已被占用，本次未点击开关。已清理本次失败的启动并重试一次，仍无法连接。请退出旧版客户端，只保留一个客户端。\n{summary}\n{recovery}\n原始异常：{exc_type}: {exc}",
   "cli.fast.errors.click_blocked": "系统拒绝了电脑发出的点击。{xiaomi}",
